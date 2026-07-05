@@ -1,4 +1,4 @@
-// Simulation of T6SS-mediated Bacterial Interactions - ver. 10.1 (28.6.2026)
+// Simulation of T6SS-mediated Bacterial Interactions - ver. 10.3.1 (6.7.2026) - optimized CLI ver 3
 // Copyright (c) 2025 Marek Basler
 // Licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0)
 // Details: https://creativecommons.org/licenses/by/4.0/
@@ -3549,10 +3549,10 @@ function restoreSimStateFromHistoryObject(stateToRestore) {
     simState.nextCellId = stateToRestore.nextCellId;
 	simState.cells = new Map(stateToRestore.cells); // It's already a map of Cell instances
     simState.activeFiringsThisStep = new Map(stateToRestore.activeFiringsThisStep);
-    simState.attackerAiGrid = new Map(stateToRestore.attackerAiGrid);
-    simState.preyAiGrid = new Map(stateToRestore.preyAiGrid);
-    simState.preyToxinNLGrid = new Map(stateToRestore.preyToxinNLGrid || stateToRestore.preyToxinGrid || []);
-    simState.preyToxinLGrid = new Map(stateToRestore.preyToxinLGrid || []);
+    simState.attackerAiGrid = stateToRestore.attackerAiGrid;
+    simState.preyAiGrid = stateToRestore.preyAiGrid;
+    simState.preyToxinNLGrid = stateToRestore.preyToxinNLGrid || stateToRestore.preyToxinGrid;
+    simState.preyToxinLGrid = stateToRestore.preyToxinLGrid;
     simState.cumulativeFirings = stateToRestore.cumulativeFirings;
     simState.cumulativeKills = { ...stateToRestore.cumulativeKills };
     simState.cumulativeLyses = { ...stateToRestore.cumulativeLyses };
@@ -4475,6 +4475,19 @@ function captureFullState() {
 }
 
 
+function createFloatGridFrom(data, radius) {
+    const grid = new FloatGrid(radius);
+    if (!data) return grid;
+    if (Array.isArray(data)) {
+        data.forEach(([k, v]) => grid.set(k, v));
+    } else if (typeof data.forEach === 'function') {
+        data.forEach((v, k) => grid.set(k, v));
+    } else if (typeof data === 'object') {
+        Object.entries(data).forEach(([k, v]) => grid.set(k, v));
+    }
+    return grid;
+}
+
 function rehydrateOptimizedStep(inputObject) {
     // This function is now robust and handles both full JSON imports and internal history frames.
     const sourceForState = inputObject.state || inputObject;
@@ -4518,6 +4531,17 @@ function rehydrateOptimizedStep(inputObject) {
 		
     }
 
+    let rad = 0;
+    if (simState && simState.config && simState.config.hexGridActualRadius !== undefined) {
+        rad = simState.config.hexGridActualRadius;
+    } else if (sourceForMetadata.config && sourceForMetadata.config.hexGridActualRadius !== undefined) {
+        rad = sourceForMetadata.config.hexGridActualRadius;
+    } else if (simState && simState.config && simState.config.grid && simState.config.grid.radius !== undefined) {
+        rad = simState.config.grid.radius;
+    } else if (sourceForMetadata.config && sourceForMetadata.config.grid && sourceForMetadata.config.grid.radius !== undefined) {
+        rad = sourceForMetadata.config.grid.radius;
+    }
+
     // Return a consistent object structure that other functions can rely on
 	return {
 		simulationStepCount: sourceForMetadata.simulationStepCount,
@@ -4534,11 +4558,11 @@ function rehydrateOptimizedStep(inputObject) {
         lysedThisStep: sourceForState.lysedThisStep ? { ...sourceForState.lysedThisStep } : { attacker: 0, prey: 0, defender: 0 },
 		cells: rehydratedCells,
 
-		// --- This simplified logic now correctly handles all maps from all sources ---
-		attackerAiGrid: new Map(sourceForState.attackerAiGrid || []),
-		preyAiGrid: new Map(sourceForState.preyAiGrid || []),
-		preyToxinNLGrid: new Map(sourceForState.preyToxinNLGrid || sourceForState.preyToxinGrid || []),
-		preyToxinLGrid: new Map(sourceForState.preyToxinLGrid || []),
+		// --- This simplified logic now correctly handles all maps and arrays, creating FloatGrids ---
+		attackerAiGrid: createFloatGridFrom(sourceForState.attackerAiGrid, rad),
+		preyAiGrid: createFloatGridFrom(sourceForState.preyAiGrid, rad),
+		preyToxinNLGrid: createFloatGridFrom(sourceForState.preyToxinNLGrid || sourceForState.preyToxinGrid, rad),
+		preyToxinLGrid: createFloatGridFrom(sourceForState.preyToxinLGrid, rad),
 		activeFiringsThisStep: new Map(sourceForState.activeFiringsThisStep || [])
 	};
 }
@@ -7950,48 +7974,22 @@ function updateHoverInfoPanel(q_coord, r_coord, rawStateSource) {
     simState.lastHoveredHexKey = simpleKey;
 
     // --- This part is robust and correct ---
-    let attackerAiGrid, preyAiGrid, preyToxinNLGrid, preyToxinLGrid;
     const sourceForGrids = rawStateSource.state || rawStateSource;
 
-    if (sourceForGrids.attackerAiGrid instanceof Map) {
-        attackerAiGrid = sourceForGrids.attackerAiGrid;
-    } else if (Array.isArray(sourceForGrids.attackerAiGrid)) {
-        attackerAiGrid = new Map(sourceForGrids.attackerAiGrid);
-    } else {
-        attackerAiGrid = new Map(Object.entries(sourceForGrids.attackerAiGrid || {}));
-    }
-    if (sourceForGrids.preyAiGrid instanceof Map) {
-        preyAiGrid = sourceForGrids.preyAiGrid;
-    } else if (Array.isArray(sourceForGrids.preyAiGrid)) {
-        preyAiGrid = new Map(sourceForGrids.preyAiGrid);
-    } else {
-        preyAiGrid = new Map(Object.entries(sourceForGrids.preyAiGrid || {}));
-    }
-    
-    // Non-Lytic Toxin Grid
-    const rawNL = sourceForGrids.preyToxinNLGrid || sourceForGrids.preyToxinGrid;
-    if (rawNL instanceof Map) {
-        preyToxinNLGrid = rawNL;
-    } else if (Array.isArray(rawNL)) {
-        preyToxinNLGrid = new Map(rawNL);
-    } else {
-        preyToxinNLGrid = new Map(Object.entries(rawNL || {}));
-    }
+    const getGridValue = (gridObj, key) => {
+        if (!gridObj) return 0;
+        if (typeof gridObj.get === 'function') return gridObj.get(key) || 0;
+        if (Array.isArray(gridObj)) {
+            const entry = gridObj.find(e => e[0] === key);
+            return entry ? entry[1] : 0;
+        }
+        return gridObj[key] || 0;
+    };
 
-    // Lytic Toxin Grid
-    const rawL = sourceForGrids.preyToxinLGrid;
-    if (rawL instanceof Map) {
-        preyToxinLGrid = rawL;
-    } else if (Array.isArray(rawL)) {
-        preyToxinLGrid = new Map(rawL);
-    } else {
-        preyToxinLGrid = new Map(Object.entries(rawL || {}));
-    }
-
-    const attackerAiConc = attackerAiGrid.get(simpleKey) || 0;
-    const preyAiConc = preyAiGrid.get(simpleKey) || 0;
-    const preyToxinNLConc = preyToxinNLGrid.get(simpleKey) || 0;
-    const preyToxinLConc = preyToxinLGrid.get(simpleKey) || 0;
+    const attackerAiConc = getGridValue(sourceForGrids.attackerAiGrid, simpleKey);
+    const preyAiConc = getGridValue(sourceForGrids.preyAiGrid, simpleKey);
+    const preyToxinNLConc = getGridValue(sourceForGrids.preyToxinNLGrid || sourceForGrids.preyToxinGrid, simpleKey);
+    const preyToxinLConc = getGridValue(sourceForGrids.preyToxinLGrid, simpleKey);
 
     infoHtml += formatCellProperty("Attacker AI", attackerAiConc);
     infoHtml += formatCellProperty("Prey AI", preyAiConc);
