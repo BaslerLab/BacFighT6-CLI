@@ -1,4 +1,4 @@
-// Simulation of T6SS-mediated Bacterial Interactions - ver. 10.3.1 (6.7.2026) - optimized CLI ver 3
+// Simulation of T6SS-mediated Bacterial Interactions - ver. 10.4 (6.7.2026)
 // Copyright (c) 2025 Marek Basler
 // Licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0)
 // Details: https://creativecommons.org/licenses/by/4.0/
@@ -3162,11 +3162,15 @@ function drawArenaOnContext(targetCtx, canvasWidth, canvasHeight, currentCells, 
 		}
 
 		const resumeButton = document.getElementById('resumeFromStateButton');
+		const resumeSyncButton = document.getElementById('resumeFromStateSyncButton');
 		if (resumeButton) {
 			// The resume button should only be clickable if we are in "scrubbing" mode.
 			// After branching history by placing a cell, you are no longer scrubbing,
 			// so the button should be disabled, and "Start" becomes the main action.
 			resumeButton.disabled = !simState.isScrubbing || isHistPlay;
+		}
+		if (resumeSyncButton) {
+			resumeSyncButton.disabled = !simState.isScrubbing || isHistPlay;
 		}
 
 		const exportStepButton = document.getElementById('exportCurrentStepStateButton');
@@ -3340,6 +3344,7 @@ async function handleTimeTravelScrub(event) {
 
     const slider = event.target;
     const resumeButton = document.getElementById('resumeFromStateButton');
+    const resumeSyncButton = document.getElementById('resumeFromStateSyncButton');
     const display = document.getElementById('timeTravelDisplay');
     let stepIndex = parseInt(slider.value);
 
@@ -3388,7 +3393,8 @@ async function handleTimeTravelScrub(event) {
     const isAtEnd = (stepIndex >= maxStep);
 
     simState.isScrubbing = !isAtEnd;
-    resumeButton.disabled = simState.isRunning || isAtEnd;
+    if (resumeButton) resumeButton.disabled = simState.isRunning || isAtEnd;
+    if (resumeSyncButton) resumeSyncButton.disabled = simState.isRunning || isAtEnd;
     historyStepBackButton.disabled = (parseInt(slider.value, 10) <= parseInt(slider.min, 10));
     const historyStepForwardButton = document.getElementById('historyStepForwardButton');
     if (historyStepForwardButton) {
@@ -3561,7 +3567,7 @@ function restoreSimStateFromHistoryObject(stateToRestore) {
     simState.totalActiveLacZReleased = stateToRestore.totalActiveLacZReleased;
 }
 
-async function restoreStateForResume() {
+async function restoreStateForResume(synchronizeRNGStream = false) {
     if (!simState.config.historyEnabled || !simState.isScrubbing) return;
 
     const slider = document.getElementById('timeTravelSlider');
@@ -3581,9 +3587,14 @@ async function restoreStateForResume() {
     // 1. Restore the simulation's object states (cells, stats, etc.)
     restoreSimStateFromHistoryObject(rehydratedState);
 
-    // 2. Reset the RNG sequence to its beginning for the current seed.
-    //    DO NOT fast-forward. This is what creates the new, divergent timeline.
+    // 2. Handle RNG Sequence
+    // Always reset the RNG sequence to its beginning for the current seed.
     initializeSeededRNG(simulationSeedInput.value);
+
+    if (synchronizeRNGStream) {
+        const targetRngCount = rehydratedState.rngDrawCountAtStep || 0;
+        synchronizeRNG(targetRngCount);
+    }
     
     // 3. Truncate the future history of the old timeline
     await truncateFutureHistory(stepIndex);
@@ -3591,6 +3602,7 @@ async function restoreStateForResume() {
     // 4. Update UI and start the new simulation branch
     simState.isScrubbing = false;
     document.getElementById('resumeFromStateButton').disabled = true;
+    document.getElementById('resumeFromStateSyncButton').disabled = true;
     updateStats();
     startButton.click();
 }
@@ -8395,7 +8407,10 @@ async function initializeSimulationCore() {
 	}
 	
 	const resumeButton = document.getElementById('resumeFromStateButton');
-	if(resumeButton) resumeButton.addEventListener('click', restoreStateForResume);
+	if(resumeButton) resumeButton.addEventListener('click', () => restoreStateForResume(false));
+	
+	const resumeSyncButton = document.getElementById('resumeFromStateSyncButton');
+	if(resumeSyncButton) resumeSyncButton.addEventListener('click', () => restoreStateForResume(true));
 	const saveSessionButton = document.getElementById('saveSessionButton');
 	if(saveSessionButton) saveSessionButton.addEventListener('click', saveFullSimulationToFile);
 	const loadSessionButton = document.getElementById('loadSessionButton');
