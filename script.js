@@ -1,4 +1,4 @@
-// Simulation of T6SS-mediated Bacterial Interactions - ver. 10.4 (6.7.2026)
+// Simulation of T6SS-mediated Bacterial Interactions - ver. 10.42 (9.7.2026)
 // Copyright (c) 2025 Marek Basler
 // Licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0)
 // Details: https://creativecommons.org/licenses/by/4.0/
@@ -555,11 +555,13 @@
 			this.width = (this.radius * 2) + 1;
 			this.maxCells = this.width * this.width;
 			this.grid = new Array(this.maxCells);
+			this.sortedActiveCells = [];
 		}
 		getIndex(q, r) { if (q < -this.radius || q > this.radius || r < -this.radius || r > this.radius) return -1; return (q + this.radius) * this.width + (r + this.radius); }
 		clear() {
 			super.clear();
 			this.grid = new Array(this.maxCells);
+			this.sortedActiveCells = [];
 		}
 		has(key) {
 			return super.has(key);
@@ -577,11 +579,37 @@
 			if (idx < 0 || idx >= this.maxCells) return this;
 			this.grid[idx] = cell;
 			super.set(key, cell);
+
+			if (!cell._inSortedList) {
+				cell._inSortedList = true;
+				let low = 0, high = this.sortedActiveCells.length;
+				while (low < high) {
+					let mid = (low + high) >>> 1;
+					if (this.sortedActiveCells[mid].id < cell.id) low = mid + 1;
+					else high = mid;
+				}
+				this.sortedActiveCells.splice(low, 0, cell);
+			}
 			return this;
 		}
 		delete(key) {
 			const [q, r] = key.split(',').map(Number);
 			const idx = this.getIndex(q, r);
+			const cell = this.get(key);
+			
+			if (cell && cell._inSortedList) {
+				cell._inSortedList = false;
+				let low = 0, high = this.sortedActiveCells.length;
+				while (low < high) {
+					let mid = (low + high) >>> 1;
+					if (this.sortedActiveCells[mid].id < cell.id) low = mid + 1;
+					else high = mid;
+				}
+				if (this.sortedActiveCells[low] && this.sortedActiveCells[low].id === cell.id) {
+					this.sortedActiveCells.splice(low, 1);
+				}
+			}
+
 			if (idx >= 0 && idx < this.maxCells && this.grid[idx] !== undefined) {
 				this.grid[idx] = undefined;
 				super.delete(key);
@@ -610,6 +638,17 @@
 		has(key) {
 			const idx = this._fastIndex(key);
 			return idx >= 0 && idx < this.maxCells;
+		}
+		getByCoords(q, r) {
+			const idx = this.getIndex(q, r);
+			return (idx >= 0 && idx < this.maxCells) ? this.grid[idx] : 0;
+		}
+		setByCoords(q, r, value) {
+			const idx = this.getIndex(q, r);
+			if (idx >= 0 && idx < this.maxCells) {
+				this.grid[idx] = value;
+			}
+			return this;
 		}
 		get(key) {
 			const idx = this._fastIndex(key);
@@ -3553,7 +3592,10 @@ function updateUiFromState(stateObject) {
 function restoreSimStateFromHistoryObject(stateToRestore) {
     simState.simulationStepCount = stateToRestore.simulationStepCount;
     simState.nextCellId = stateToRestore.nextCellId;
-	simState.cells = new Map(stateToRestore.cells); // It's already a map of Cell instances
+	simState.cells = new CellMap(simState.config.hexGridActualRadius);
+	for (const [key, cell] of stateToRestore.cells) {
+		simState.cells.set(key, cell);
+	}
     simState.activeFiringsThisStep = new Map(stateToRestore.activeFiringsThisStep);
     simState.attackerAiGrid = stateToRestore.attackerAiGrid;
     simState.preyAiGrid = stateToRestore.preyAiGrid;
@@ -4877,8 +4919,8 @@ async function runSimulationStep() {
 				
 				// Prey Toxin Damage accumulation
 				if (cell.type !== 'prey' && cell.type !== 'barrier' && !cell.isLysing) {
-					const localPreyNL = simState.preyToxinNLGrid.get(key) || 0;
-					const localPreyL = simState.preyToxinLGrid.get(key) || 0;
+					const localPreyNL = simState.preyToxinNLGrid.getByCoords(cell.q, cell.r) || 0;
+					const localPreyL = simState.preyToxinLGrid.getByCoords(cell.q, cell.r) || 0;
 					if (localPreyNL > 0 || localPreyL > 0) {
 						let nlResistance = 0;
 						let lResistance = 0;
@@ -4900,7 +4942,7 @@ async function runSimulationStep() {
 								if (absorbedNL >= 1) {
 									cell.accumulatedPreyToxinNL += absorbedNL;
 									const newNLVal = localPreyNL - absorbedNL;
-									simState.preyToxinNLGrid.set(key, newNLVal < 0.01 ? 0 : Math.round(newNLVal * 1e5) / 1e5);
+									simState.preyToxinNLGrid.setByCoords(cell.q, cell.r, newNLVal < 0.01 ? 0 : Math.round(newNLVal * 1e5) / 1e5);
 									if (cell.accumulatedPreyToxinNL >= (sensitivityConfig.preyToxinNLThreshold || 1)) {
 										if (!cell.isDead) {
 											cell.isDead = true;
@@ -4916,7 +4958,7 @@ async function runSimulationStep() {
 									if (absorbedL >= 1) {
 										cell.accumulatedPreyToxinL += absorbedL;
 										const newLVal = localPreyL - absorbedL;
-										simState.preyToxinLGrid.set(key, newLVal < 0.01 ? 0 : Math.round(newLVal * 1e5) / 1e5);
+										simState.preyToxinLGrid.setByCoords(cell.q, cell.r, newLVal < 0.01 ? 0 : Math.round(newLVal * 1e5) / 1e5);
 										if (cell.accumulatedPreyToxinL >= (sensitivityConfig.preyToxinLThreshold || 1)) {
 											const oldIsDead = cell.isDead;
 											cell.isDead = true;
@@ -4940,12 +4982,12 @@ async function runSimulationStep() {
 			}
 		}
 
-		const cellsToProcess = Array.from(newCellsWorkingCopy.values());
-		cellsToProcess.sort((a, b) => {
-			if (a.id < b.id) return -1;
-			if (a.id > b.id) return 1;
-			return 0;
-		});
+		const cellsToProcess = [];
+		for (let i = 0; i < newCellsWorkingCopy.sortedActiveCells.length; i++) {
+			if (!newCellsWorkingCopy.sortedActiveCells[i].isEffectivelyGone) {
+				cellsToProcess.push(newCellsWorkingCopy.sortedActiveCells[i]);
+			}
+		}
 
 		// Snapshot for actions, using the working copy that has had cooldowns decremented and gone cells removed
 		const currentCellsSnapshotForActions = new Map(newCellsWorkingCopy);
@@ -5351,7 +5393,7 @@ async function runSimulationStep() {
 
 			if (cell.type === 'prey' && !cell.isDead && !cell.isLysing && cell.capsuleLayers < 5 && !cell.isFormingCapsule) {
 				const capsuleConfig = simState.config.prey.capsule;
-				const preyAiConcentration = simState.preyAiGrid.get(key) || 0;
+				const preyAiConcentration = simState.preyAiGrid.getByCoords(cell.q, cell.r) || 0;
 				let p_synthesis = 0.0;
 
 				const K = capsuleConfig.midpoint;
@@ -5390,13 +5432,13 @@ async function runSimulationStep() {
 				newCellsWorkingCopy.forEach((cell, key) => {
 					// Attacker AI Production
 					if (cell.type === 'attacker' && !cell.isDead && !cell.isLysing) {
-						const currentAI = simState.attackerAiGrid.get(key) || 0;
-						simState.attackerAiGrid.set(key, currentAI + simState.config.attacker.qs.productionRate);
+						const currentAI = simState.attackerAiGrid.getByCoords(cell.q, cell.r) || 0;
+						simState.attackerAiGrid.setByCoords(cell.q, cell.r, currentAI + simState.config.attacker.qs.productionRate);
 					}
 					// Prey AI Production
 					if (cell.type === 'prey' && !cell.isDead && !cell.isLysing) {
-						const currentPreyAI = simState.preyAiGrid.get(key) || 0;
-						simState.preyAiGrid.set(key, currentPreyAI + simState.config.prey.qs.productionRate);
+						const currentPreyAI = simState.preyAiGrid.getByCoords(cell.q, cell.r) || 0;
+						simState.preyAiGrid.setByCoords(cell.q, cell.r, currentPreyAI + simState.config.prey.qs.productionRate);
 					}
 					// Prey Toxin Production
 					if (cell.type === 'prey' && !cell.isDead && !cell.isLysing) {
@@ -5409,7 +5451,7 @@ async function runSimulationStep() {
 								let startProduction = false;
 								if (triggerMode === 'qs') {
 									const qsConfig = simState.config.prey.toxinQS;
-									const preyAiConcentration = simState.preyAiGrid.get(key) || 0;
+									const preyAiConcentration = simState.preyAiGrid.getByCoords(cell.q, cell.r) || 0;
 									const K = qsConfig.midpoint;
 									const n = qsConfig.cooperativity;
 									let p_synthesis = 0.0;
@@ -5479,7 +5521,7 @@ async function runSimulationStep() {
 								let startProduction = false;
 								if (triggerMode === 'qs') {
 									const qsConfig = simState.config.prey.toxinQS;
-									const preyAiConcentration = simState.preyAiGrid.get(key) || 0;
+									const preyAiConcentration = simState.preyAiGrid.getByCoords(cell.q, cell.r) || 0;
 									const K = qsConfig.midpoint;
 									const n = qsConfig.cooperativity;
 									let p_synthesis = 0.0;
@@ -5532,11 +5574,11 @@ async function runSimulationStep() {
 								const prodL = simState.config.prey.toxinL.productionRate || 0;
 
 								// Release continuously
-								const currentPreyNL = simState.preyToxinNLGrid.get(key) || 0;
-								simState.preyToxinNLGrid.set(key, currentPreyNL + prodNL);
+								const currentPreyNL = simState.preyToxinNLGrid.getByCoords(cell.q, cell.r) || 0;
+								simState.preyToxinNLGrid.setByCoords(cell.q, cell.r, currentPreyNL + prodNL);
 
-								const currentPreyL = simState.preyToxinLGrid.get(key) || 0;
-								simState.preyToxinLGrid.set(key, currentPreyL + prodL);
+								const currentPreyL = simState.preyToxinLGrid.getByCoords(cell.q, cell.r) || 0;
+								simState.preyToxinLGrid.setByCoords(cell.q, cell.r, currentPreyL + prodL);
 
 								// Accumulate to track continuous production progress
 								cell.continuousToxinProduced = (cell.continuousToxinProduced || 0) + (prodNL + prodL);
